@@ -886,13 +886,15 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             SidebarSessionList(selection: $selection)
-                .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
+                .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+                .frame(maxHeight: .infinity)
                 .environmentObject(tabs)
 
             VStack(spacing: 0) {
                 TabbedTerminalView()
                     .environmentObject(tabs)
                     .environmentObject(store)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if let n = notice {
                     HStack {
                         Image(systemName: "info.circle")
@@ -909,7 +911,7 @@ struct ContentView: View {
                     .background(.thinMaterial)
                 }
             }
-            .frame(minWidth: 500)
+            .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Claude Code Sessions")
         .navigationSubtitle("\(tabs.open.count) running · \(store.filtered.count) total")
@@ -1027,7 +1029,7 @@ struct ContentView: View {
                     .help("Toggle inspector")
                 }
             }
-        .frame(minWidth: 1100, minHeight: 640)
+        .frame(minWidth: 720, minHeight: 480)
         .onAppear { store.reload() }
         .sheet(item: $renameTarget) { s in
             RenameSheet(session: s, value: $renameValue) { newValue in

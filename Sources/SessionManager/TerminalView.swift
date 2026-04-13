@@ -18,13 +18,45 @@ struct EmbeddedTerminal: NSViewRepresentable {
         term.nativeBackgroundColor = NSColor(calibratedRed: 0.07, green: 0.07, blue: 0.10, alpha: 1)
         term.nativeForegroundColor = NSColor(calibratedRed: 0.92, green: 0.92, blue: 0.95, alpha: 1)
 
-        let env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
-        let shellArgs = ["-l", "-c", command]
+        // GUI apps don't inherit the user's interactive PATH. Build a sensible
+        // PATH that covers Homebrew (Apple Silicon + Intel), system bin, and
+        // ~/.local/bin / ~/bin where Claude Code is typically installed.
+        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+        let home = NSHomeDirectory()
+        let extraPaths = [
+            "\(home)/.local/bin",
+            "\(home)/bin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+        // Find the existing PATH entry and prepend our paths
+        var foundPath = false
+        env = env.map { entry -> String in
+            if entry.hasPrefix("PATH=") {
+                foundPath = true
+                let existing = String(entry.dropFirst("PATH=".count))
+                return "PATH=" + (extraPaths + [existing]).joined(separator: ":")
+            }
+            return entry
+        }
+        if !foundPath {
+            env.append("PATH=" + extraPaths.joined(separator: ":"))
+        }
+        env.append("HOME=\(home)")
+        env.append("LANG=en_US.UTF-8")
+
+        // -l (login) sources .zprofile/.zshenv; -i (interactive) sources .zshrc
+        // so users with `claude` aliased in .zshrc still work.
+        let shellArgs = ["-l", "-i", "-c", command]
         term.startProcess(executable: "/bin/zsh", args: shellArgs,
                           environment: env, execName: "zsh")
 
-        // Set working dir via the spawned shell command (zsh uses the parent's cwd by default;
-        // we cd via the command string when wiring it from SessionManager).
         return term
     }
 
@@ -59,11 +91,11 @@ struct TerminalPaneView: View {
     }
 
     var command: String {
-        // cd to the original cwd (fallback to home) and exec claude --resume
         let cwdExists = FileManager.default.fileExists(atPath: session.cwd)
         let cwd = cwdExists ? session.cwd : NSHomeDirectory()
         let escaped = cwd.replacingOccurrences(of: "\"", with: "\\\"")
-        return "cd \"\(escaped)\" && exec claude --resume \(session.id)"
+        let claudePath = ClaudeLocator.resolvePath() ?? "claude"
+        return "cd \"\(escaped)\" && exec \"\(claudePath)\" --resume \(session.id)"
     }
 
     var body: some View {
@@ -101,5 +133,54 @@ struct TerminalPaneView: View {
             EmbeddedTerminal(command: command, cwd: session.cwd, isRunning: $isRunning)
                 .id(key)
         }
+    }
+}
+
+/// Finds the `claude` binary across nvm, ~/.local/bin, Homebrew, etc.
+enum ClaudeLocator {
+    private static var cached: String?
+
+    static func resolvePath() -> String? {
+        if let c = cached { return c }
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        var candidates = [
+            "\(home)/.local/bin/claude",
+            "\(home)/bin/claude",
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude"
+        ]
+        let nvmDir = "\(home)/.nvm/versions/node"
+        if let nodes = try? fm.contentsOfDirectory(atPath: nvmDir) {
+            for v in nodes {
+                candidates.append("\(nvmDir)/\(v)/bin/claude")
+            }
+        }
+        candidates.append("\(home)/.fnm/aliases/default/bin/claude")
+        candidates.append("\(home)/.volta/bin/claude")
+        candidates.append("\(home)/.asdf/shims/claude")
+
+        for c in candidates where fm.isExecutableFile(atPath: c) {
+            cached = c
+            return c
+        }
+
+        let task = Process()
+        task.launchPath = "/bin/zsh"
+        task.arguments = ["-l", "-i", "-c", "command -v claude"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let path = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty && fm.isExecutableFile(atPath: path) {
+                cached = path
+                return path
+            }
+        } catch {}
+        return nil
     }
 }

@@ -1,0 +1,13 @@
+{
+  "": {
+    "dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ArgumentParserToolInfo.d",
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ArgumentParserToolInfo.o",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/primary.swiftdeps"
+  },
+  "/Users/owencope/Downloads/SessionManager-app/.build/checkouts/swift-argument-parser/Sources/ArgumentParserToolInfo/ToolInfo.swift": {
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ToolInfo.swift.o",
+    "swiftmodule": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ToolInfo~partial.swiftmodule",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ToolInfo.swiftdeps",
+    "diagnostics": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/ToolInfo.dia"
+  }
+}
