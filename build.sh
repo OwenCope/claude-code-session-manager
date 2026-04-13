@@ -17,13 +17,16 @@ ICONSET="$BUILD/AppIcon.iconset"
 swift make_icon.swift "$ICONSET" >/dev/null
 iconutil -c icns "$ICONSET" -o "$BUILD/$APP/Contents/Resources/AppIcon.icns"
 
-echo "→ Compiling Swift..."
-swiftc -O \
-    -parse-as-library \
-    -target arm64-apple-macos14.0 \
-    -framework SwiftUI -framework AppKit \
-    -o "$BUILD/$APP/Contents/MacOS/SessionManager" \
-    main.swift
+echo "→ swift build -c release ..."
+swift build -c release --product SessionManager
+
+BIN_PATH="$(swift build -c release --show-bin-path)"
+cp "$BIN_PATH/SessionManager" "$BUILD/$APP/Contents/MacOS/SessionManager"
+
+# Copy any bundled resources from SwiftTerm or other deps
+for bundle in "$BIN_PATH"/*.bundle; do
+    [ -e "$bundle" ] && cp -R "$bundle" "$BUILD/$APP/Contents/Resources/"
+done
 
 cp Info.plist "$BUILD/$APP/Contents/Info.plist"
 
@@ -32,14 +35,12 @@ codesign --force --deep --sign - "$BUILD/$APP"
 
 mkdir -p "$DIST"
 
-# Build a friendly DMG layout: app + Applications shortcut + helper script + README
 DMG_STAGE="$BUILD/dmg-stage"
 rm -rf "$DMG_STAGE"
 mkdir -p "$DMG_STAGE"
 cp -R "$BUILD/$APP" "$DMG_STAGE/"
 ln -s /Applications "$DMG_STAGE/Applications"
 
-# Helper that strips the quarantine attribute (fixes "cannot be opened" on Macs without Apple Developer signing)
 cat > "$DMG_STAGE/Fix Gatekeeper.command" <<'SH'
 #!/usr/bin/env bash
 APP="/Applications/Session Manager.app"
@@ -61,26 +62,14 @@ Session Manager — Installation
 
 1.  Drag "Session Manager.app" into the Applications folder shortcut.
 
-2.  Because this app is signed ad-hoc (not Apple-notarized), macOS will
-    block it on first launch with:
-        "Apple could not verify [...] is free of malware"
-
-    OPEN TERMINAL (Applications > Utilities > Terminal) AND PASTE:
+2.  In Terminal (Applications > Utilities > Terminal), paste:
 
         xattr -dr com.apple.quarantine "/Applications/Session Manager.app"
 
-    Press Return. Then double-click Session Manager normally — done.
+    Then double-click Session Manager normally — done.
 
-    (The "Fix Gatekeeper.command" file in this DMG does the same thing,
-     but Gatekeeper blocks .command files too, so the Terminal one-liner
-     above is the most reliable approach.)
-
-3.  Where do deleted sessions go?
-    They are MOVED (not permanently deleted) to:
-        ~/.claude/projects/.trash/
-    Click "Show Trash" in the app's toolbar to open it in Finder.
-    Restore by moving files back to ~/.claude/projects/<project-dir>/
-
+3.  Future versions update via the in-app "Update" button (no quarantine
+    fix needed for in-app updates).
 TXT
 
 echo "→ Building DMG..."
@@ -91,7 +80,6 @@ hdiutil create -volname "Session Manager" \
     -ov -format UDZO \
     "$DMG" >/dev/null
 
-# Strip quarantine from local app copy so the developer's machine can launch it directly
 xattr -dr com.apple.quarantine "$BUILD/$APP" || true
 cp -R "$BUILD/$APP" "$DIST/"
 xattr -dr com.apple.quarantine "$DIST/$APP" || true

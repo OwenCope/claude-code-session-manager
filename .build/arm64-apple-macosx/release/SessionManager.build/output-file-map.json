@@ -1,0 +1,31 @@
+{
+  "": {
+    "dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SessionManager.d",
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SessionManager.o",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/primary.swiftdeps"
+  },
+  "/Users/owencope/Downloads/SessionManager-app/Sources/SessionManager/App.swift": {
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/App.swift.o",
+    "swiftmodule": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/App~partial.swiftmodule",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/App.swiftdeps",
+    "diagnostics": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/App.dia"
+  },
+  "/Users/owencope/Downloads/SessionManager-app/Sources/SessionManager/SidebarList.swift": {
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SidebarList.swift.o",
+    "swiftmodule": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SidebarList~partial.swiftmodule",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SidebarList.swiftdeps",
+    "diagnostics": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/SidebarList.dia"
+  },
+  "/Users/owencope/Downloads/SessionManager-app/Sources/SessionManager/TabbedTerminalView.swift": {
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TabbedTerminalView.swift.o",
+    "swiftmodule": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TabbedTerminalView~partial.swiftmodule",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TabbedTerminalView.swiftdeps",
+    "diagnostics": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TabbedTerminalView.dia"
+  },
+  "/Users/owencope/Downloads/SessionManager-app/Sources/SessionManager/TerminalView.swift": {
+    "object": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TerminalView.swift.o",
+    "swiftmodule": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TerminalView~partial.swiftmodule",
+    "swift-dependencies": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TerminalView.swiftdeps",
+    "diagnostics": "/Users/owencope/Downloads/SessionManager-app/.build/arm64-apple-macosx/release/SessionManager.build/TerminalView.dia"
+  }
+}

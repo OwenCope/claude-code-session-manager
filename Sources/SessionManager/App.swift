@@ -838,9 +838,25 @@ struct ContentUnavailableViewCompat: View {
 
 // MARK: - Root content
 
+@MainActor
+final class TerminalTabs: ObservableObject {
+    @Published var open: [Session] = []
+    @Published var active: String?
+
+    func openOrFocus(_ s: Session) {
+        if !open.contains(where: { $0.id == s.id }) { open.append(s) }
+        active = s.id
+    }
+    func close(_ id: String) {
+        open.removeAll { $0.id == id }
+        if active == id { active = open.last?.id }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: SessionStore
     @EnvironmentObject var updater: Updater
+    @StateObject private var tabs = TerminalTabs()
     @State private var showUpdatePrompt = false
     @State private var selection: Set<String> = []
     @State private var renameTarget: Session?
@@ -868,32 +884,35 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SessionTable(
-                selection: $selection,
-                onResume: { resumeInTerminal($0) },
-                onRename: { renameTarget = $0; renameValue = $0.customName },
-                onDeleteRequest: { confirmDelete = true }
-            )
-            if let n = notice {
-                HStack {
-                    Image(systemName: "info.circle")
-                    Text(n).font(.caption)
-                    Spacer()
-                    Button { notice = nil } label: {
-                        Image(systemName: "xmark.circle.fill")
+        HSplitView {
+            SidebarSessionList(selection: $selection)
+                .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
+                .environmentObject(tabs)
+
+            VStack(spacing: 0) {
+                TabbedTerminalView()
+                    .environmentObject(tabs)
+                    .environmentObject(store)
+                if let n = notice {
+                    HStack {
+                        Image(systemName: "info.circle")
+                        Text(n).font(.caption)
+                        Spacer()
+                        Button { notice = nil } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.thinMaterial)
             }
+            .frame(minWidth: 500)
         }
-        .navigationTitle(store.selectedProject ?? "All Sessions")
-        .navigationSubtitle("\(store.filtered.count) session\(store.filtered.count == 1 ? "" : "s")")
-        .searchable(text: $store.filter, placement: .toolbar, prompt: "Filter sessions")
+        .navigationTitle("Claude Code Sessions")
+        .navigationSubtitle("\(tabs.open.count) running · \(store.filtered.count) total")
         .inspector(isPresented: $inspectorVisible) {
             InspectorView(selection: selection)
                 .inspectorColumnWidth(min: 320, ideal: 420, max: 600)
@@ -905,12 +924,21 @@ struct ContentView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         if let id = selection.first, let s = store.sessions.first(where: { $0.id == id }) {
+                            tabs.openOrFocus(s)
+                        }
+                    } label: { Label("Resume in App", systemImage: "play.fill") }
+                        .disabled(selection.count != 1)
+                        .help("Open the session in an embedded terminal tab (⏎)")
+                        .keyboardShortcut(.return, modifiers: [])
+
+                    Button {
+                        if let id = selection.first, let s = store.sessions.first(where: { $0.id == id }) {
                             resumeInTerminal(s)
                         }
-                    } label: { Label("Resume", systemImage: "play.fill") }
+                    } label: { Label("Open in Terminal.app", systemImage: "rectangle.and.text.magnifyingglass") }
                         .disabled(selection.count != 1)
-                        .help("Resume in Terminal (⏎)")
-                        .keyboardShortcut(.return, modifiers: [])
+                        .help("Open in the system Terminal (⌘⏎)")
+                        .keyboardShortcut(.return, modifiers: .command)
 
                     Button {
                         if let id = selection.first, let s = store.sessions.first(where: { $0.id == id }) {
