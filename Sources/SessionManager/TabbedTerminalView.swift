@@ -4,6 +4,7 @@ import SwiftUI
 struct TabbedTerminalView: View {
     @EnvironmentObject var tabs: TerminalTabs
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var agentStatus: AgentStatusStore
 
     var activeSession: Session? {
         guard let id = tabs.active else { return nil }
@@ -19,6 +20,7 @@ struct TabbedTerminalView: View {
                             TabChip(
                                 session: s,
                                 isActive: tabs.active == s.id,
+                                agent: agentStatus.state(for: s.id),
                                 onSelect: { tabs.active = s.id },
                                 onClose: { tabs.close(s.id) }
                             )
@@ -45,18 +47,34 @@ struct TabbedTerminalView: View {
 struct TabChip: View {
     let session: Session
     let isActive: Bool
+    let agent: AgentState?
     let onSelect: () -> Void
     let onClose: () -> Void
     @State private var hovering = false
 
+    var dotColor: Color {
+        switch agent?.status {
+        case .working: return .orange
+        case .waiting: return .yellow
+        case .idle:    return .green
+        default:       return .green
+        }
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(Color.green)
+                .fill(dotColor)
                 .frame(width: 7, height: 7)
             Text(session.displayName)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
+            if let a = agent, let label = statusLabel(a) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             if hovering || isActive {
                 Button { onClose() } label: {
                     Image(systemName: "xmark")

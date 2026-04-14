@@ -968,6 +968,7 @@ final class TerminalTabs: ObservableObject {
 struct ContentView: View {
     @EnvironmentObject var store: SessionStore
     @EnvironmentObject var updater: Updater
+    @EnvironmentObject var hookServer: HookServer
     @StateObject private var tabs = TerminalTabs()
     @State private var showUpdatePrompt = false
     @State private var selection: Set<String> = []
@@ -997,10 +998,14 @@ struct ContentView: View {
 
     var body: some View {
         HSplitView {
-            SidebarSessionList(selection: $selection)
-                .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
-                .frame(maxHeight: .infinity)
-                .environmentObject(tabs)
+            VStack(spacing: 0) {
+                SidebarSessionList(selection: $selection)
+                    .environmentObject(tabs)
+                Divider()
+                HookServerFooter()
+            }
+            .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+            .frame(maxHeight: .infinity)
 
             VStack(spacing: 0) {
                 TabbedTerminalView()
@@ -1346,16 +1351,29 @@ struct RenameSheet: View {
 struct SessionManagerApp: App {
     @StateObject var store = SessionStore()
     @StateObject var updater = Updater()
+    @StateObject var agentStatus = AgentStatusStore()
+    @StateObject var hookServer: HookServer
+
+    init() {
+        let s = AgentStatusStore()
+        _agentStatus = StateObject(wrappedValue: s)
+        _hookServer = StateObject(wrappedValue: HookServer(status: s))
+    }
 
     var body: some Scene {
         WindowGroup("Claude Sessions") {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(agentStatus)
+                .environmentObject(hookServer)
                 .background(WindowAccessor())
                 .task {
                     // Silent check on launch
                     await updater.check(silent: true)
+                }
+                .task {
+                    hookServer.start()
                 }
                 .task {
                     // Periodic reload so the sidebar's "live" dots and
@@ -1377,8 +1395,43 @@ struct SessionManagerApp: App {
                 }
                 Button("Reload Sessions") { store.reload() }
                     .keyboardShortcut("r", modifiers: .command)
+                Divider()
+                Button("Install Claude Code Hooks…") {
+                    installHooksWithAlert(port: hookServer.port)
+                }
+                Button("Remove Claude Code Hooks") {
+                    try? HookInstaller.uninstall()
+                }
             }
         }
+    }
+}
+
+@MainActor
+func installHooksWithAlert(port: UInt16) {
+    let alert = NSAlert()
+    alert.messageText = "Install Claude Code hooks?"
+    alert.informativeText = """
+        This will add entries to ~/.claude/settings.json so Claude Code \
+        posts live status (tool calls, notifications, stops) to Session \
+        Manager on 127.0.0.1:\(port). Your other settings are preserved.
+        """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Install")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    do {
+        let r = try HookInstaller.install(port: port)
+        let done = NSAlert()
+        done.messageText = "Hooks installed"
+        done.informativeText = "Added \(r.installed) new hook(s); \(r.alreadyPresent) were already present. Restart any running `claude` sessions for changes to take effect."
+        done.runModal()
+    } catch {
+        let err = NSAlert()
+        err.messageText = "Couldn't install hooks"
+        err.informativeText = "\(error.localizedDescription)"
+        err.alertStyle = .warning
+        err.runModal()
     }
 }
 

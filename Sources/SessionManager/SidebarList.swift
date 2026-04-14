@@ -6,6 +6,7 @@ import SwiftUI
 struct SidebarSessionList: View {
     @EnvironmentObject var store: SessionStore
     @EnvironmentObject var tabs: TerminalTabs
+    @EnvironmentObject var agentStatus: AgentStatusStore
     @Binding var selection: Set<String>
 
     var body: some View {
@@ -47,7 +48,9 @@ struct SidebarSessionList: View {
                 }
             )) {
                 ForEach(store.filtered) { s in
-                    SidebarRow(session: s, isOpenAsTab: tabs.open.contains(where: { $0.id == s.id }))
+                    SidebarRow(session: s,
+                               isOpenAsTab: tabs.open.contains(where: { $0.id == s.id }),
+                               agent: agentStatus.state(for: s.id))
                         .tag(s.id)
                         .contextMenu {
                             Button("Open in App") { tabs.openOrFocus(s) }
@@ -66,6 +69,7 @@ struct SidebarSessionList: View {
 struct SidebarRow: View {
     let session: Session
     let isOpenAsTab: Bool
+    let agent: AgentState?
 
     var avatarColor: Color {
         let h = abs(session.projectName.hashValue) % 360
@@ -99,8 +103,12 @@ struct SidebarRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    if session.isActive {
-                        LivePulseDot()
+                    if agent?.status == .working {
+                        LivePulseDot(color: .orange)
+                    } else if agent?.status == .waiting {
+                        LivePulseDot(color: .yellow)
+                    } else if session.isActive {
+                        LivePulseDot(color: .orange)
                     }
                     Text(session.displayName)
                         .font(.system(.callout, weight: .semibold))
@@ -110,9 +118,22 @@ struct SidebarRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Text(session.projectName)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.tint)
+                HStack(spacing: 6) {
+                    Text(session.projectName)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tint)
+                    if let a = agent, let label = statusLabel(a) {
+                        Text(label)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(.quaternary.opacity(0.6))
+                            )
+                    }
+                }
                 Text(session.firstPrompt.replacingOccurrences(of: "\n", with: " "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -123,20 +144,22 @@ struct SidebarRow: View {
     }
 }
 
-/// Small orange pulsing dot used to mark sessions whose transcripts were
-/// touched in the last ~minute — a visual "active right now" indicator.
+/// Small pulsing dot used to mark sessions whose transcripts were
+/// touched in the last ~minute or that have live hook-driven status —
+/// a visual "active right now" indicator.
 struct LivePulseDot: View {
+    var color: Color = .orange
     @State private var pulse = false
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.orange.opacity(0.35))
+                .fill(color.opacity(0.35))
                 .frame(width: 14, height: 14)
                 .scaleEffect(pulse ? 1.6 : 1.0)
                 .opacity(pulse ? 0 : 1)
             Circle()
-                .fill(Color.orange)
+                .fill(color)
                 .frame(width: 7, height: 7)
         }
         .frame(width: 14, height: 14)
@@ -145,5 +168,48 @@ struct LivePulseDot: View {
                 pulse = true
             }
         }
+    }
+}
+
+/// Compact footer under the sidebar showing whether the hook server is
+/// running and which port it's on. Tapping the "Install hooks" link runs
+/// the same installer as the menu item.
+struct HookServerFooter: View {
+    @EnvironmentObject var hookServer: HookServer
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(hookServer.running ? Color.green : Color.red)
+                .frame(width: 7, height: 7)
+            Text(hookServer.running
+                 ? "Hook server · :\(hookServer.port)"
+                 : "Hook server off")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Install hooks") {
+                installHooksWithAlert(port: hookServer.port)
+            }
+            .buttonStyle(.plain)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.regularMaterial)
+    }
+}
+
+func statusLabel(_ state: AgentState) -> String? {
+    // Stale after 5 minutes of silence — don't keep lying.
+    if Date().timeIntervalSince(state.updated) > 300 { return nil }
+    switch state.status {
+    case .working:
+        if let t = state.tool { return t }
+        return "working"
+    case .waiting: return "needs input"
+    case .idle: return nil
+    case .unknown: return nil
     }
 }
