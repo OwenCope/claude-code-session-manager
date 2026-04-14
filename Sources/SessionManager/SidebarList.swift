@@ -98,7 +98,10 @@ struct SidebarRow: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack {
+                HStack(spacing: 6) {
+                    if session.isActive {
+                        LivePulseDot()
+                    }
                     Text(session.displayName)
                         .font(.system(.callout, weight: .semibold))
                         .lineLimit(1)
@@ -117,5 +120,30 @@ struct SidebarRow: View {
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// Small orange pulsing dot used to mark sessions whose transcripts were
+/// touched in the last ~minute — a visual "active right now" indicator.
+struct LivePulseDot: View {
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.orange.opacity(0.35))
+                .frame(width: 14, height: 14)
+                .scaleEffect(pulse ? 1.6 : 1.0)
+                .opacity(pulse ? 0 : 1)
+            Circle()
+                .fill(Color.orange)
+                .frame(width: 7, height: 7)
+        }
+        .frame(width: 14, height: 14)
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
     }
 }

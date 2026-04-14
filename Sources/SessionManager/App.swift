@@ -37,6 +37,13 @@ struct Session: Identifiable, Hashable {
     var effectiveName: String {
         customName.isEmpty ? claudeName : customName
     }
+
+    /// True if the session's transcript was touched recently — used to mark
+    /// the sidebar row as "live". 90s window covers the lull between an
+    /// assistant turn finishing and the user typing their next prompt.
+    var isActive: Bool {
+        Date().timeIntervalSince(mtime) < 90
+    }
 }
 
 // MARK: - Loader
@@ -520,8 +527,7 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Downloads the DMG asset and opens it in Finder, then quits the app so the
-    /// user can drag the new version into /Applications.
+    /// Full auto-install: download DMG, mount, replace running app, relaunch.
     func downloadAndOpen() async {
         guard let release = available,
               let asset = release.assets.first(where: { $0.name.hasSuffix(".dmg") }),
@@ -529,21 +535,127 @@ final class Updater: ObservableObject {
             self.status = "No DMG asset on the latest release"
             return
         }
-        self.status = "Downloading \(asset.name)..."
+        self.status = "Downloading \(asset.name)…"
         downloadProgress = 0
         do {
             let (tmp, _) = try await URLSession.shared.download(from: url)
-            let dest = FileManager.default.temporaryDirectory
+            let dmg = FileManager.default.temporaryDirectory
                 .appendingPathComponent(asset.name)
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: tmp, to: dest)
-            NSWorkspace.shared.open(dest)
-            self.status = "Opened installer. Drag the new app into Applications, then relaunch."
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            NSApplication.shared.terminate(nil)
+            try? FileManager.default.removeItem(at: dmg)
+            try FileManager.default.moveItem(at: tmp, to: dmg)
+
+            self.status = "Mounting installer…"
+            let mountPoint = try mount(dmg: dmg)
+            defer {
+                _ = try? run("/usr/bin/hdiutil", ["detach", mountPoint, "-quiet"])
+            }
+
+            // Find the .app inside
+            let fm = FileManager.default
+            let contents = try fm.contentsOfDirectory(atPath: mountPoint)
+            guard let appName = contents.first(where: { $0.hasSuffix(".app") }) else {
+                self.status = "DMG didn't contain an .app"
+                return
+            }
+            let newApp = (mountPoint as NSString).appendingPathComponent(appName)
+            let currentApp = Bundle.main.bundleURL.path
+            let pid = ProcessInfo.processInfo.processIdentifier
+
+            self.status = "Installing v\(release.tagName)…"
+            try writeAndRunInstaller(
+                newAppPath: newApp,
+                currentAppPath: currentApp,
+                mountPoint: mountPoint,
+                pid: pid
+            )
+
+            self.status = "Restarting…"
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await MainActor.run { NSApplication.shared.terminate(nil) }
         } catch {
-            self.status = "Download failed: \(error.localizedDescription)"
+            self.status = "Update failed: \(error.localizedDescription)"
         }
+    }
+
+    private func mount(dmg: URL) throws -> String {
+        let out = try run("/usr/bin/hdiutil",
+                          ["attach", dmg.path, "-nobrowse", "-quiet", "-plist"])
+        // Parse the plist for the mount-point
+        guard let data = out.data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let entities = plist["system-entities"] as? [[String: Any]] else {
+            throw NSError(domain: "Updater", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not parse hdiutil output"])
+        }
+        for e in entities {
+            if let m = e["mount-point"] as? String, !m.isEmpty {
+                return m
+            }
+        }
+        throw NSError(domain: "Updater", code: 2,
+                      userInfo: [NSLocalizedDescriptionKey: "DMG mounted but no mount point found"])
+    }
+
+    @discardableResult
+    private func run(_ launchPath: String, _ args: [String]) throws -> String {
+        let task = Process()
+        task.launchPath = launchPath
+        task.arguments = args
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        try task.run()
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Writes a shell script that waits for the app to quit, replaces the bundle,
+    /// strips quarantine, detaches the DMG, and relaunches the new app.
+    /// Detaches via `nohup` so it survives our termination.
+    private func writeAndRunInstaller(
+        newAppPath: String,
+        currentAppPath: String,
+        mountPoint: String,
+        pid: Int32
+    ) throws {
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("session-manager-update-\(UUID().uuidString).sh")
+        let logURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("session-manager-update.log")
+
+        // Quote everything for shell safety
+        func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+
+        let script = """
+        #!/usr/bin/env bash
+        set -e
+        exec >\(q(logURL.path)) 2>&1
+        echo "[$(date)] Updater started, waiting for PID \(pid) to exit…"
+        for i in $(seq 1 200); do
+            if ! kill -0 \(pid) 2>/dev/null; then break; fi
+            sleep 0.1
+        done
+        echo "[$(date)] App quit. Replacing bundle…"
+        rm -rf \(q(currentAppPath))
+        cp -R \(q(newAppPath)) \(q(currentAppPath))
+        xattr -dr com.apple.quarantine \(q(currentAppPath)) || true
+        hdiutil detach \(q(mountPoint)) -quiet || true
+        echo "[$(date)] Relaunching…"
+        open \(q(currentAppPath))
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path
+        )
+
+        // Detach so it outlives this process
+        let task = Process()
+        task.launchPath = "/usr/bin/nohup"
+        task.arguments = ["/bin/bash", scriptURL.path]
+        task.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
+        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        try task.run()
     }
 }
 
@@ -1244,6 +1356,15 @@ struct SessionManagerApp: App {
                 .task {
                     // Silent check on launch
                     await updater.check(silent: true)
+                }
+                .task {
+                    // Periodic reload so the sidebar's "live" dots and
+                    // "2m ago" timestamps stay fresh without the user
+                    // hitting Cmd-R.
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 15_000_000_000)
+                        store.reload()
+                    }
                 }
         }
         .windowStyle(.titleBar)
