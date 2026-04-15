@@ -1,6 +1,8 @@
 import Foundation
 import Network
 import SwiftUI
+import UserNotifications
+import AppKit
 
 /// Live status for a session, driven by Claude Code hook events.
 enum AgentStatus: String {
@@ -24,11 +26,11 @@ final class AgentStatusStore: ObservableObject {
 
     func apply(_ event: HookEvent) {
         let now = Date()
+        let previous = byId[event.sessionId]?.status
         switch event.kind {
         case "PreToolUse":
             byId[event.sessionId] = AgentState(status: .working, tool: event.toolName, updated: now)
         case "PostToolUse":
-            // Still working until Stop arrives; clear the tool name.
             var s = byId[event.sessionId] ?? AgentState(status: .working, tool: nil, updated: now)
             s.status = .working
             s.tool = nil
@@ -36,8 +38,14 @@ final class AgentStatusStore: ObservableObject {
             byId[event.sessionId] = s
         case "Notification":
             byId[event.sessionId] = AgentState(status: .waiting, tool: event.toolName, updated: now)
+            if previous != .waiting {
+                AgentNotifier.shared.notifyWaiting(sessionId: event.sessionId, message: event.message)
+            }
         case "Stop", "SubagentStop":
             byId[event.sessionId] = AgentState(status: .idle, tool: nil, updated: now)
+            if previous == .working || previous == .waiting {
+                AgentNotifier.shared.notifyIdle(sessionId: event.sessionId)
+            }
         case "UserPromptSubmit":
             byId[event.sessionId] = AgentState(status: .working, tool: nil, updated: now)
         default:
@@ -54,6 +62,7 @@ struct HookEvent {
     let kind: String       // from URL path: /hook/PreToolUse etc.
     let sessionId: String
     let toolName: String?
+    let message: String?   // from Notification event payloads
 }
 
 /// Minimal HTTP/1.1 server on 127.0.0.1:<port>. Not a general HTTP
@@ -204,9 +213,10 @@ final class HookServer: ObservableObject {
         let obj = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
         let sessionId = obj["session_id"] as? String ?? ""
         let toolName = obj["tool_name"] as? String
+        let message = obj["message"] as? String
         guard !sessionId.isEmpty else { return }
 
-        status.apply(HookEvent(kind: kind, sessionId: sessionId, toolName: toolName))
+        status.apply(HookEvent(kind: kind, sessionId: sessionId, toolName: toolName, message: message))
     }
 }
 
@@ -306,5 +316,101 @@ enum HookInstaller {
             }
         }
         return false
+    }
+}
+
+// MARK: - Notifications
+
+/// Posted by AgentNotifier when the user clicks a "needs input"
+/// notification banner. ContentView observes this and asks
+/// TerminalTabs to open / focus the matching session.
+extension Notification.Name {
+    static let focusSession = Notification.Name("SessionManager.focusSession")
+}
+
+/// Fires macOS notifications (and bounces the dock) when a session
+/// transitions into "needs input" or finishes its turn. Throttled per
+/// session so a chatty hook script can't spam the user.
+@MainActor
+final class AgentNotifier: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = AgentNotifier()
+
+    private var authorized = false
+    private var lastFired: [String: Date] = [:]
+    private let throttle: TimeInterval = 10
+
+    override private init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound]
+        ) { [weak self] granted, _ in
+            Task { @MainActor in self?.authorized = granted }
+        }
+    }
+
+    // Show the banner even if the app is foregrounded — otherwise
+    // notifications are silently swallowed when the user already has
+    // Session Manager open in another desktop / space.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        if let sid = info["session_id"] as? String {
+            Task { @MainActor in
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(
+                    name: .focusSession,
+                    object: nil,
+                    userInfo: ["session_id": sid]
+                )
+            }
+        }
+        completionHandler()
+    }
+
+    func notifyWaiting(sessionId: String, message: String?) {
+        guard shouldFire(sessionId) else { return }
+        let title = "Claude needs input"
+        let body = (message?.isEmpty == false ? message! : "Permission or input required.")
+        post(title: title, body: body, sessionId: sessionId)
+        // Bounce the dock icon once — draws the eye without stealing focus.
+        NSApp.requestUserAttention(.informationalRequest)
+    }
+
+    func notifyIdle(sessionId: String) {
+        // Intentionally a no-op: every assistant turn ends in Stop, so
+        // bouncing/banner here would be constant noise. Kept as a hook
+        // for future behavior (e.g. only notify after long-running turns).
+    }
+
+    private func shouldFire(_ sessionId: String) -> Bool {
+        let now = Date()
+        if let last = lastFired[sessionId], now.timeIntervalSince(last) < throttle {
+            return false
+        }
+        lastFired[sessionId] = now
+        return true
+    }
+
+    private func post(title: String, body: String, sessionId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["session_id": sessionId]
+        let req = UNNotificationRequest(identifier: "waiting-\(sessionId)",
+                                        content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 }

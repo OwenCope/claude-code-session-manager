@@ -1148,6 +1148,17 @@ struct ContentView: View {
             }
         .frame(minWidth: 720, minHeight: 480)
         .onAppear { store.reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSession)) { note in
+            guard let sid = note.userInfo?["session_id"] as? String else { return }
+            // Reload first so a brand-new session is in the store.
+            store.reload()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if let s = store.sessions.first(where: { $0.id == sid }) {
+                    tabs.openOrFocus(s)
+                    selection = [sid]
+                }
+            }
+        }
         .sheet(item: $renameTarget) { s in
             RenameSheet(session: s, value: $renameValue) { newValue in
                 do {
@@ -1374,6 +1385,9 @@ struct SessionManagerApp: App {
                 }
                 .task {
                     hookServer.start()
+                    // Force-init the notifier so its UNUserNotificationCenter
+                    // delegate is registered before any banners are tapped.
+                    _ = AgentNotifier.shared
                 }
                 .task {
                     // Periodic reload so the sidebar's "live" dots and
