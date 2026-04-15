@@ -90,11 +90,20 @@ struct TerminalPaneView: View {
         session.cwd.replacingOccurrences(of: "\"", with: "\\\"")
     }
 
+    var isDraft: Bool { session.id.hasPrefix("draft-") }
+
     var command: String {
+        let claudePath = ClaudeLocator.resolvePath() ?? "claude"
+        if isDraft {
+            // Brand-new session: the synthetic Session stores its cwd in
+            // `path`, not the projectDir-derived `cwd` getter.
+            let dir = session.path.path
+            let escaped = dir.replacingOccurrences(of: "\"", with: "\\\"")
+            return "cd \"\(escaped)\" && exec \"\(claudePath)\""
+        }
         let cwdExists = FileManager.default.fileExists(atPath: session.cwd)
         let cwd = cwdExists ? session.cwd : NSHomeDirectory()
         let escaped = cwd.replacingOccurrences(of: "\"", with: "\\\"")
-        let claudePath = ClaudeLocator.resolvePath() ?? "claude"
         return "cd \"\(escaped)\" && exec \"\(claudePath)\" --resume \(session.id)"
     }
 
@@ -109,7 +118,7 @@ struct TerminalPaneView: View {
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Spacer()
-                Text(session.cwd)
+                Text(isDraft ? session.path.path : session.cwd)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -130,7 +139,9 @@ struct TerminalPaneView: View {
             .background(.thinMaterial)
             Divider()
 
-            EmbeddedTerminal(command: command, cwd: session.cwd, isRunning: $isRunning)
+            EmbeddedTerminal(command: command,
+                             cwd: isDraft ? session.path.path : session.cwd,
+                             isRunning: $isRunning)
                 .id(key)
         }
     }

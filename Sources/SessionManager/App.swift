@@ -368,6 +368,14 @@ final class SessionStore: ObservableObject {
     @Published var filter: String = ""
     @Published var loading: Bool = false
     @Published var selectedProject: String? = nil  // nil = all
+    @Published var pinned: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessionIds") ?? [])
+
+    func togglePin(_ id: String) {
+        if pinned.contains(id) { pinned.remove(id) } else { pinned.insert(id) }
+        UserDefaults.standard.set(Array(pinned), forKey: "pinnedSessionIds")
+    }
+
+    func isPinned(_ id: String) -> Bool { pinned.contains(id) }
 
     var projects: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
@@ -963,6 +971,21 @@ final class TerminalTabs: ObservableObject {
         open.removeAll { $0.id == id }
         if active == id { active = open.last?.id }
     }
+
+    /// Spawn a brand-new Claude session in `cwd`. Wraps it in a Session
+    /// with a synthetic id so TerminalPaneView can detect "fresh" mode
+    /// and skip the --resume flag.
+    func openNew(cwd: String) {
+        let synthId = "draft-\(UUID().uuidString)"
+        let url = URL(fileURLWithPath: cwd)
+        let s = Session(id: synthId,
+                        path: url,
+                        projectDir: url,
+                        mtime: Date(),
+                        customName: "New session — \(url.lastPathComponent)")
+        open.append(s)
+        active = synthId
+    }
 }
 
 struct ContentView: View {
@@ -997,38 +1020,38 @@ struct ContentView: View {
     }
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
+            HSplitView {
                 SidebarSessionList(selection: $selection)
                     .environmentObject(tabs)
-                Divider()
-                HookServerFooter()
-            }
-            .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
-            .frame(maxHeight: .infinity)
+                    .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+                    .frame(maxHeight: .infinity)
 
-            VStack(spacing: 0) {
-                TabbedTerminalView()
-                    .environmentObject(tabs)
-                    .environmentObject(store)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let n = notice {
-                    HStack {
-                        Image(systemName: "info.circle")
-                        Text(n).font(.caption)
-                        Spacer()
-                        Button { notice = nil } label: {
-                            Image(systemName: "xmark.circle.fill")
+                VStack(spacing: 0) {
+                    TabbedTerminalView()
+                        .environmentObject(tabs)
+                        .environmentObject(store)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if let n = notice {
+                        HStack {
+                            Image(systemName: "info.circle")
+                            Text(n).font(.caption)
+                            Spacer()
+                            Button { notice = nil } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tertiary)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.thinMaterial)
                 }
+                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            GlobalStatusBar()
         }
         .navigationTitle("Claude Code Sessions")
         .navigationSubtitle("\(tabs.open.count) running · \(store.filtered.count) total")
@@ -1041,6 +1064,20 @@ struct ContentView: View {
                 ProjectPicker()
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        let panel = NSOpenPanel()
+                        panel.title = "Choose project directory for new session"
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.allowsMultipleSelection = false
+                        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+                        if panel.runModal() == .OK, let url = panel.url {
+                            tabs.openNew(cwd: url.path)
+                        }
+                    } label: { Label("New Session", systemImage: "plus.circle.fill") }
+                        .help("Start a brand new Claude session in a chosen directory (⌘N)")
+                        .keyboardShortcut("n", modifiers: .command)
+
                     Button {
                         if let id = selection.first, let s = store.sessions.first(where: { $0.id == id }) {
                             tabs.openOrFocus(s)
