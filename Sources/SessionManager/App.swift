@@ -578,10 +578,13 @@ final class Updater: ObservableObject {
             )
 
             self.status = "Restarting…"
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            // Give the detached installer a moment to actually fork off
+            // before we terminate — otherwise on slow disks the `sh -c`
+            // wrapper is still alive when SIGTERM lands.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await MainActor.run { NSApplication.shared.terminate(nil) }
         } catch {
-            self.status = "Update failed: \(error.localizedDescription)"
+            self.status = "Update failed: \(error.localizedDescription) — log: /tmp/session-manager-update.log"
         }
     }
 
@@ -618,9 +621,14 @@ final class Updater: ObservableObject {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    /// Writes a shell script that waits for the app to quit, replaces the bundle,
+    /// Writes a shell script that waits for the app to quit, atomically
+    /// replaces the bundle (move-then-copy with rollback on failure),
     /// strips quarantine, detaches the DMG, and relaunches the new app.
-    /// Detaches via `nohup` so it survives our termination.
+    ///
+    /// The script is launched through `sh -c "nohup … &"` so it ends up
+    /// in its own process group, with stdio fully redirected — without
+    /// that, macOS kills the child as soon as Session Manager terminates
+    /// because the inherited group dies with the parent.
     private func writeAndRunInstaller(
         newAppPath: String,
         currentAppPath: String,
@@ -632,38 +640,71 @@ final class Updater: ObservableObject {
         let logURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("session-manager-update.log")
 
-        // Quote everything for shell safety
-        func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+        func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
+        // Atomic install: move old to backup, copy new in place, only
+        // remove the backup once cp succeeds. If anything fails, restore
+        // the backup so the user is never left without an app.
         let script = """
-        #!/usr/bin/env bash
-        set -e
+        #!/bin/bash
         exec >\(q(logURL.path)) 2>&1
-        echo "[$(date)] Updater started, waiting for PID \(pid) to exit…"
-        for i in $(seq 1 200); do
-            if ! kill -0 \(pid) 2>/dev/null; then break; fi
+        set -u
+        echo "[$(date)] Updater started — waiting for PID \(pid) to exit…"
+        for i in $(seq 1 600); do
+            if ! kill -0 \(pid) 2>/dev/null; then
+                echo "[$(date)] PID \(pid) gone after $((i / 10))s"
+                break
+            fi
             sleep 0.1
         done
-        echo "[$(date)] App quit. Replacing bundle…"
-        rm -rf \(q(currentAppPath))
-        cp -R \(q(newAppPath)) \(q(currentAppPath))
-        xattr -dr com.apple.quarantine \(q(currentAppPath)) || true
-        hdiutil detach \(q(mountPoint)) -quiet || true
-        echo "[$(date)] Relaunching…"
-        open \(q(currentAppPath))
+        # Even after kill -0 fails, give SwiftUI/AppKit a beat to release file handles.
+        sleep 0.5
+
+        CURRENT=\(q(currentAppPath))
+        NEW=\(q(newAppPath))
+        BACKUP="${CURRENT}.old.$$"
+
+        echo "[$(date)] Backing up: $CURRENT -> $BACKUP"
+        if [ -e "$CURRENT" ] && ! mv "$CURRENT" "$BACKUP"; then
+            echo "[$(date)] FAILED to back up the existing bundle — aborting."
+            exit 1
+        fi
+
+        echo "[$(date)] Copying new bundle into place…"
+        if ! /bin/cp -R "$NEW" "$CURRENT"; then
+            echo "[$(date)] cp FAILED — restoring backup."
+            rm -rf "$CURRENT" 2>/dev/null || true
+            mv "$BACKUP" "$CURRENT" 2>/dev/null || true
+            exit 1
+        fi
+
+        /usr/bin/xattr -dr com.apple.quarantine "$CURRENT" 2>/dev/null || true
+        rm -rf "$BACKUP" 2>/dev/null || true
+        /usr/bin/hdiutil detach \(q(mountPoint)) -quiet 2>/dev/null || true
+
+        echo "[$(date)] Relaunching $CURRENT"
+        /usr/bin/open "$CURRENT"
+        echo "[$(date)] Done."
         """
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path
         )
 
-        // Detach so it outlives this process
+        // Hand off to a transient `sh -c` whose only job is to background
+        // the installer with nohup and exit immediately. The `&` puts it
+        // in its own process group so it outlives Session Manager.
         let task = Process()
-        task.launchPath = "/usr/bin/nohup"
-        task.arguments = ["/bin/bash", scriptURL.path]
-        task.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "nohup /bin/bash \(scriptURL.path) </dev/null >/dev/null 2>&1 &"
+        ]
+        task.standardInput  = FileHandle.nullDevice
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError  = FileHandle.nullDevice
         try task.run()
+        task.waitUntilExit()  // Wait for `sh` itself, not the backgrounded installer.
     }
 }
 
